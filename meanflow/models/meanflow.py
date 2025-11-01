@@ -142,7 +142,9 @@ class MeanFlow(nn.Module):
         r = torch.zeros(samples_shape[0], device=device)
         latent = None
         if self.m_encoder is not None:
-            latent = torch.zeros(z_1.shape[0], self.latent_dim, device=device, dtype=z_1.dtype)
+            latent = torch.randn(
+                z_1.shape[0], self.latent_dim, device=device, dtype=z_1.dtype
+            )
 
         u = net(z_1, (t, t - r), aug_cond=None, latent=latent)
         z_0 = z_1 - u
