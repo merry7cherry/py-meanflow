@@ -64,53 +64,51 @@ class MeanFlow(nn.Module):
             mu, logvar = self.m_encoder.encode(e, x, z, time_steps, aug_cond)
             latent_m = self.m_encoder.reparameterize(mu, logvar, eps)
             kl_loss = self.m_encoder.kl_divergence(mu, logvar).mean()
-
-            def m_func(e_in, x_in, z_in, t_in, r_in):
-                mu_in, logvar_in = self.m_encoder.encode(
-                    e_in,
-                    x_in,
-                    z_in,
-                    (t_in, t_in - r_in),
-                    aug_cond,
-                )
-                return self.m_encoder.reparameterize(mu_in, logvar_in, eps)
-
-            _, dmdt = torch.func.jvp(
-                m_func,
-                (e, x, z, t, r),
-                (
-                    torch.zeros_like(e),
-                    torch.zeros_like(x),
-                    v,
-                    torch.ones_like(t),
-                    torch.zeros_like(r),
-                ),
-            )
-
-            def u_func(z_in, t_in, r_in, m_in):
-                h_in = t_in - r_in
-                return self.net(z_in, (t_in.view(-1), h_in.view(-1)), aug_cond, latent=m_in)
-
         else:
             latent_m = None
-            dmdt = None
             kl_loss = 0.0
-
-            def u_func(z_in, t_in, r_in):
-                h_in = t_in - r_in
-                return self.net(z_in, (t_in.view(-1), h_in.view(-1)), aug_cond)
 
         dtdt = torch.ones_like(t)
         drdt = torch.zeros_like(r)
 
         with torch.amp.autocast("cuda", enabled=False):
             if self.m_encoder is not None:
+                def m_func(e_in, x_in, z_in, t_in, r_in):
+                    mu_in, logvar_in = self.m_encoder.encode(
+                        e_in,
+                        x_in,
+                        z_in,
+                        (t_in, t_in - r_in),
+                        aug_cond,
+                    )
+                    return self.m_encoder.reparameterize(mu_in, logvar_in, eps)
+
+                _, dmdt = torch.func.jvp(
+                    m_func,
+                    (e, x, z, t, r),
+                    (
+                        torch.zeros_like(e),
+                        torch.zeros_like(x),
+                        v,
+                        torch.ones_like(t),
+                        torch.zeros_like(r),
+                    ),
+                )
+
+                def u_func(z_in, t_in, r_in, m_in):
+                    h_in = t_in - r_in
+                    return self.net(z_in, (t_in.view(-1), h_in.view(-1)), aug_cond, latent=m_in)
+
                 u_pred, dudt = torch.func.jvp(
                     u_func,
                     (z, t, r, latent_m),
                     (v, dtdt, drdt, dmdt),
                 )
             else:
+                def u_func(z_in, t_in, r_in):
+                    h_in = t_in - r_in
+                    return self.net(z_in, (t_in.view(-1), h_in.view(-1)), aug_cond)
+
                 u_pred, dudt = torch.func.jvp(
                     u_func,
                     (z, t, r),
