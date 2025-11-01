@@ -62,7 +62,7 @@ class LightVAE(nn.Module):
         self,
         t: torch.Tensor,
         h: torch.Tensor,
-        aug_cond: Optional[torch.Tensor] = None,
+        aug_cond: Optional[torch.Tensor],
     ) -> torch.Tensor:
         if t.dim() > 1:
             t = t.view(t.shape[0])
@@ -90,7 +90,7 @@ class LightVAE(nn.Module):
         x: torch.Tensor,
         z: torch.Tensor,
         time_steps: Tuple[torch.Tensor, torch.Tensor],
-        aug_cond: Optional[torch.Tensor] = None,
+        aug_cond: Optional[torch.Tensor],
     ) -> Tuple[torch.Tensor, torch.Tensor]:
         t, h = time_steps
         stacked = torch.cat([e, x, z], dim=1)
@@ -118,7 +118,7 @@ class LightVAE(nn.Module):
         x: torch.Tensor,
         z: torch.Tensor,
         time_steps: Tuple[torch.Tensor, torch.Tensor],
-        aug_cond: Optional[torch.Tensor] = None,
+        aug_cond: Optional[torch.Tensor],
         eps: Optional[torch.Tensor] = None,
     ) -> torch.Tensor:
         mu, logvar = self.encode(e, x, z, time_steps, aug_cond)
@@ -132,7 +132,7 @@ class LightVAE(nn.Module):
         x: torch.Tensor,
         z: torch.Tensor,
         time_steps: Tuple[torch.Tensor, torch.Tensor],
-        aug_cond: Optional[torch.Tensor] = None,
+        aug_cond: Optional[torch.Tensor],
     ) -> torch.Tensor:
         mu, logvar = self.encode(e, x, z, time_steps, aug_cond)
         kl = self.kl_divergence(mu, logvar)
