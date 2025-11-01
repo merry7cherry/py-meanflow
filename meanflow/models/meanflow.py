@@ -66,14 +66,14 @@ class MeanFlow(nn.Module):
             kl_loss = self.m_encoder.kl_divergence(mu, logvar).mean()
 
             def m_func(e_in, x_in, z_in, t_in, r_in):
-                return self.m_encoder.forward_latent(
+                mu_in, logvar_in = self.m_encoder.encode(
                     e_in,
                     x_in,
                     z_in,
                     (t_in, t_in - r_in),
-                    eps,
                     aug_cond,
                 )
+                return self.m_encoder.reparameterize(mu_in, logvar_in, eps)
 
             _, dmdt = torch.func.jvp(
                 m_func,

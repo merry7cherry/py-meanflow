@@ -118,10 +118,12 @@ class LightVAE(nn.Module):
         x: torch.Tensor,
         z: torch.Tensor,
         time_steps: Tuple[torch.Tensor, torch.Tensor],
-        eps: torch.Tensor,
         aug_cond: Optional[torch.Tensor] = None,
+        eps: Optional[torch.Tensor] = None,
     ) -> torch.Tensor:
         mu, logvar = self.encode(e, x, z, time_steps, aug_cond)
+        if eps is None:
+            eps = torch.randn_like(mu)
         return self.reparameterize(mu, logvar, eps)
 
     def kl_loss(
