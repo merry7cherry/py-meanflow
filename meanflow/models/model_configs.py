@@ -23,6 +23,7 @@ MODEL_CONFIGS = {
         "channel_mult": [2, 2, 2],
         "encoder_type": "standard",
         "decoder_type": "standard",
+        "latent_dim": 128,
     },
 }
 

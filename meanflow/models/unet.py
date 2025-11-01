@@ -287,6 +287,7 @@ class SongUNet(torch.nn.Module):
         encoder_type        = 'standard',   # Encoder architecture: 'standard' for DDPM++, 'residual' for NCSN++.
         decoder_type        = 'standard',   # Decoder architecture: 'standard' for both DDPM++ and NCSN++.
         resample_filter     = [1,1],        # Resampling filter: [1,1] for DDPM++, [1,3,3,1] for NCSN++.
+        latent_dim          = 0,
     ):
         assert embedding_type in ['fourier', 'positional']
         assert encoder_type in ['standard', 'skip', 'residual']
@@ -309,8 +310,10 @@ class SongUNet(torch.nn.Module):
         self.map_noise = PositionalEmbedding(num_channels=noise_channels, endpoint=True) if embedding_type == 'positional' else FourierEmbedding(num_channels=noise_channels)
         self.map_label = Linear(in_features=label_dim, out_features=noise_channels, **init) if label_dim else None
         self.map_augment = Linear(in_features=augment_dim, out_features=noise_channels * 2, bias=False, **init) if augment_dim else None
+        self.latent_dim = latent_dim
         self.map_layer0 = Linear(in_features=noise_channels * 2, out_features=emb_channels, **init)
         self.map_layer1 = Linear(in_features=emb_channels, out_features=emb_channels, **init)
+        self.map_latent = Linear(in_features=latent_dim, out_features=noise_channels * 2, bias=False, **init) if latent_dim > 0 else None
 
         # Encoder.
         self.enc = torch.nn.ModuleDict()
@@ -357,7 +360,7 @@ class SongUNet(torch.nn.Module):
                 self.dec[f'{res}x{res}_aux_norm'] = GroupNorm(num_channels=cout, eps=1e-6)
                 self.dec[f'{res}x{res}_aux_conv'] = Conv2d(in_channels=cout, out_channels=out_channels, kernel=3, **init_zero)
 
-    def forward(self, x, time_steps, aug_cond=None):
+    def forward(self, x, time_steps, aug_cond=None, latent=None):
         augment_labels = aug_cond
         # assert extra == {} or list(extra.keys()) == ['aug_cond'], "Other extra conditions not tested yet in this repo."
         # augment_labels = extra.get('aug_cond', None)
@@ -381,6 +384,8 @@ class SongUNet(torch.nn.Module):
             emb = emb + self.map_label(tmp * np.sqrt(self.map_label.in_features))
         if self.map_augment is not None and augment_labels is not None:
             emb = emb + self.map_augment(augment_labels)
+        if latent is not None and self.map_latent is not None:
+            emb = emb + self.map_latent(latent.to(emb.dtype))
         emb = silu(self.map_layer0(emb))
         emb = silu(self.map_layer1(emb))
 
