@@ -35,6 +35,25 @@ class MeanFlow(nn.Module):
         for i, ema_decay in enumerate(self.ema_decays):
             self.add_module(f"net_ema{i + 1}", init_ema(self.net, arch(**net_configs), ema_decay))
 
+        if self.m_encoder is not None:
+            encoder_kwargs = dict(
+                img_resolution=net_configs["img_resolution"],
+                in_channels=net_configs["in_channels"],
+                latent_dim=self.latent_dim,
+                augment_dim=net_configs.get("augment_dim", 0),
+            )
+            self.m_encoder_ema = init_ema(
+                self.m_encoder,
+                LightVAE(**encoder_kwargs),
+                args.ema_decay,
+            )
+            self.encoder_ema_decays = args.ema_decays
+            for i, ema_decay in enumerate(self.encoder_ema_decays):
+                self.add_module(
+                    f"m_encoder_ema{i + 1}",
+                    init_ema(self.m_encoder, LightVAE(**encoder_kwargs), ema_decay),
+                )
+
     def update_ema(self):
         self.num_updates += 1
         # num_updates = self.num_updates.item()
@@ -45,6 +64,15 @@ class MeanFlow(nn.Module):
         # update extra ema
         for i in range(len(self.ema_decays)):
             update_ema_net(self.net, self._modules[f"net_ema{i + 1}"], num_updates)
+
+        if self.m_encoder is not None:
+            update_ema_net(self.m_encoder, self.m_encoder_ema, num_updates)
+            for i in range(len(self.encoder_ema_decays)):
+                update_ema_net(
+                    self.m_encoder,
+                    self._modules[f"m_encoder_ema{i + 1}"],
+                    num_updates,
+                )
 
     def forward_with_loss(self, x, aug_cond):
 
