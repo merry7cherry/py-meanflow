@@ -85,16 +85,11 @@ class MeanFlow(nn.Module):
         v = e - x
 
         # define network function
+        kl_loss = 0.0
         if self.m_encoder is not None:
             eps = torch.randn(x.shape[0], self.latent_dim, device=device, dtype=x.dtype)
-
-            time_steps = (t, t - r)
-            mu, logvar = self.m_encoder.encode(e, x, z, time_steps, aug_cond)
-            latent_m = self.m_encoder.reparameterize(mu, logvar, eps)
-            kl_loss = self.m_encoder.kl_divergence(mu, logvar).mean()
         else:
-            latent_m = None
-            kl_loss = 0.0
+            eps = None
 
         dtdt = torch.ones_like(t)
         drdt = torch.zeros_like(r)
@@ -109,9 +104,10 @@ class MeanFlow(nn.Module):
                         (t_in, t_in - r_in),
                         aug_cond,
                     )
-                    return self.m_encoder.reparameterize(mu_in, logvar_in, eps)
+                    latent_in = self.m_encoder.reparameterize(mu_in, logvar_in, eps)
+                    return latent_in, mu_in, logvar_in
 
-                _, dmdt = torch.func.jvp(
+                (latent_m, mu, logvar), (dmdt, _, _) = torch.func.jvp(
                     m_func,
                     (e, x, z, t, r),
                     (
@@ -122,6 +118,8 @@ class MeanFlow(nn.Module):
                         torch.zeros_like(r),
                     ),
                 )
+
+                kl_loss = self.m_encoder.kl_divergence(mu, logvar).mean()
 
                 def u_func(z_in, t_in, r_in, m_in):
                     h_in = t_in - r_in
@@ -145,14 +143,12 @@ class MeanFlow(nn.Module):
 
             u_tgt = (v - (t - r) * dudt).detach()
 
-            loss = (u_pred - u_tgt)**2
-            loss = loss.sum(dim=(1, 2, 3))  # squared l2 loss
-            
-            # adaptive weighting
-            adp_wt = (loss.detach() + self.args.norm_eps) ** self.args.norm_p
-            loss = loss / adp_wt
+            residual = u_pred - u_tgt
+            sq_norm = residual.square().flatten(1).sum(dim=1)
 
-            loss = loss.mean()  # mean over batch dimension
+            # adaptive weighting
+            adp_wt = (sq_norm.detach() + self.args.norm_eps) ** self.args.norm_p
+            loss = (sq_norm / adp_wt).mean()
 
             if self.m_encoder is not None:
                 loss = loss + kl_loss
