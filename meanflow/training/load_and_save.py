@@ -6,18 +6,15 @@
 from pathlib import Path
 
 import torch
-from training.distributed_mode import is_main_process
-
 import logging
 
 
 def save_on_master(*args, **kwargs):
-    if is_main_process():
-        torch.save(*args, **kwargs)
+    torch.save(*args, **kwargs)
 
 
 def save_model(
-    args, epoch, model_without_ddp, optimizer, lr_schedule,
+    args, epoch, model, optimizer, lr_schedule,
 ):
     output_dir = Path(args.output_dir)
     epoch_name = str(epoch)
@@ -27,7 +24,7 @@ def save_model(
         checkpoint_paths.append(output_dir / ("checkpoint-%s.pth" % epoch_name))
     for checkpoint_path in checkpoint_paths:
         to_save = {
-            "model": model_without_ddp.state_dict(),
+            "model": model.state_dict(),
             "optimizer": optimizer.state_dict(),
             "lr_schedule": lr_schedule.state_dict(),
             "epoch": epoch,
@@ -37,7 +34,7 @@ def save_model(
         save_on_master(to_save, checkpoint_path)
 
 
-def load_model(args, model_without_ddp, optimizer, lr_schedule):
+def load_model(args, model, optimizer, lr_schedule):
     if args.resume:
         if args.resume.startswith("https"):
             checkpoint = torch.hub.load_state_dict_from_url(
@@ -45,7 +42,7 @@ def load_model(args, model_without_ddp, optimizer, lr_schedule):
             )
         else:
             checkpoint = torch.load(args.resume, map_location="cpu", weights_only=False)
-        model_without_ddp.load_state_dict(checkpoint["model"], strict=False)
+        model.load_state_dict(checkpoint["model"], strict=False)
         logging.info("Resume checkpoint %s" % args.resume)
         if (
             "optimizer" in checkpoint

@@ -11,7 +11,7 @@ import numpy as np
 
 
 def get_rank():
-    return torch.distributed.get_rank() if torch.distributed.is_initialized() else 0
+    return 0
 
 
 def fold_in(seed: int, *args) -> int:
@@ -25,7 +25,7 @@ def fold_in(seed: int, *args) -> int:
     return folded_seed
 
 
-def train_step_with_rng_control(train_step_fn, model_without_ddp, step: int, base_seed: int, *args, **kwargs):
+def train_step_with_rng_control(train_step_fn, model, step: int, base_seed: int, *args, **kwargs):
     rank = get_rank()
     seed = fold_in(base_seed, step, rank, "train_step")
     input_device = args[0].device if len(args) > 0 and torch.is_tensor(args[0]) else "cpu"
@@ -34,7 +34,7 @@ def train_step_with_rng_control(train_step_fn, model_without_ddp, step: int, bas
         torch.manual_seed(seed)
         if torch.cuda.is_available() and "cuda" in str(input_device):
             torch.cuda.manual_seed(seed)
-        return train_step_fn(model_without_ddp, *args, **kwargs)
+        return train_step_fn(model, *args, **kwargs)
 
 
 def augment_with_rng_control(augment_pipe, samples, base_seed: int, steps: int):

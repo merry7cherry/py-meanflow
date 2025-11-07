@@ -21,11 +21,10 @@ import torchvision.datasets as datasets
 from models.model_configs import instantiate_model
 from train_arg_parser import get_args_parser
 
-from training import distributed_mode
 from training.data_transform import get_transform_cifar, get_transform_mnist
 from training.eval_loop import eval_model
 from training.load_and_save import load_model, save_model
-from training.train_loop import train_one_epoch, train_step
+from training.train_loop import TrainStepRunner, train_one_epoch, train_step
 from torchmetrics.aggregation import MeanMetric
 import models.rng as rng
 
@@ -71,44 +70,31 @@ def get_data_loader(args, is_for_fid):
     logger.info(dataset)
 
     logger.info("Intializing DataLoader")
-    num_tasks = distributed_mode.get_world_size()
-    global_rank = distributed_mode.get_rank()
-    sampler = torch.utils.data.DistributedSampler(
-        dataset, num_replicas=num_tasks, rank=global_rank, shuffle=True
-    )
+    shuffle = not is_for_fid
     data_loader = torch.utils.data.DataLoader(
         dataset,
-        sampler=sampler,
-        worker_init_fn=partial(rng.worker_init_fn, rank=global_rank),
+        shuffle=shuffle,
+        worker_init_fn=partial(rng.worker_init_fn, rank=0),
         batch_size=args.batch_size,
         num_workers=args.num_workers,
         pin_memory=args.pin_mem,
         drop_last=not is_for_fid,  # for FID evaluation, we want to keep all samples
     )
-    logger.info(str(sampler))
     return data_loader
 
 
 def main(args):
-    distributed_mode.init_distributed_mode(args)
-
-    print(f"Rank: {distributed_mode.get_rank()}")
-    print(f"World Size: {distributed_mode.get_world_size()}")
-
-    if distributed_mode.get_rank() == 0:
+    if not logging.getLogger().hasHandlers():
         logging.basicConfig(
             level=logging.INFO,
             stream=sys.stdout,
             format="%(asctime)s %(levelname)-8s %(message)s",
             datefmt="%Y-%m-%d %H:%M:%S",
         )
-    else:
-        logger.addHandler(logging.NullHandler())
 
     logger.info("job dir: {}".format(os.path.dirname(os.path.realpath(__file__))))
     logger.info("{}".format(args).replace(", ", ",\n"))
-    if distributed_mode.is_main_process():
-        # create tensorboard
+    if args.output_dir:
         os.makedirs(args.output_dir, exist_ok=True)
         log_writer = SummaryWriter(log_dir=args.output_dir)
         logger.info(f"Tensorboard writer created at {args.output_dir}")
@@ -119,7 +105,7 @@ def main(args):
     device = torch.device(args.device)
 
     # set the seeds
-    seed = args.seed + distributed_mode.get_rank()  # legacy. TODO: rng.fold_in 
+    seed = args.seed
     torch.manual_seed(seed)
     np.random.seed(seed)
 
@@ -132,30 +118,17 @@ def main(args):
     # define the model
     logger.info("Initializing Model")
     model = instantiate_model(args)
-
     model.to(device)
-
-    model_without_ddp = model
     print_model(model)
 
-    eff_batch_size = args.batch_size * distributed_mode.get_world_size()
+    eff_batch_size = args.batch_size
 
     logger.info(f"Learning rate: {args.lr:.2e}")
 
     logger.info(f"Effective batch size: {eff_batch_size}")
 
-    if args.distributed:
-        model = torch.nn.parallel.DistributedDataParallel(
-            model, device_ids=[args.gpu],
-            find_unused_parameters=False,
-            broadcast_buffers=False,
-            static_graph=True,
-            gradient_as_bucket_view=True
-        )
-        model_without_ddp = model.module
-
     optimizer = torch.optim.Adam(  # Note: Adam, not AdamW
-        model_without_ddp.net.parameters(),  # only the "net" parameters
+        model.net.parameters(),  # only the "net" parameters
         lr=args.lr,
         betas=args.optimizer_betas,
         weight_decay=0.0
@@ -171,15 +144,17 @@ def main(args):
 
     load_model(
         args=args,
-        model_without_ddp=model_without_ddp,
+        model=model,
         optimizer=optimizer,
         lr_schedule=lr_schedule,
     )
 
-    compiled_train_step = torch.compile(
-        train_step,
-        disable=not args.compile,
-    )
+    if args.compile:
+        compiled_train_step = torch.compile(train_step)
+    else:
+        compiled_train_step = train_step
+
+    train_step_runner = TrainStepRunner(train_step, compiled_train_step, args.compile)
 
     batch_loss = MeanMetric().to(device, non_blocking=True)
     batch_time = MeanMetric().to(device, non_blocking=True)
@@ -191,12 +166,10 @@ def main(args):
     logger.info(f"Start from {args.start_epoch} to {args.epochs} epochs")
     start_time = time.time()
     for epoch in range(args.start_epoch, args.epochs):
-        if args.distributed:
-            data_loader_train.sampler.set_epoch(epoch)
         if not args.eval_only:
             train_one_epoch(
                 model=model,
-                compiled_train_step=compiled_train_step,
+                train_step_runner=train_step_runner,
                 data_loader=data_loader_train,
                 optimizer=optimizer,
                 lr_schedule=lr_schedule,
@@ -215,7 +188,7 @@ def main(args):
             if not args.eval_only:
                 save_model(
                     args=args,
-                    model_without_ddp=model_without_ddp,
+                    model=model,
                     optimizer=optimizer,
                     lr_schedule=lr_schedule,
                     epoch=epoch,
@@ -223,7 +196,7 @@ def main(args):
                 logging.info(f"Saved checkpoint to {args.output_dir}")
 
             # Eval ema model:
-            net_eval = model_without_ddp.net_ema
+            net_eval = model.net_ema
             ema_decay = net_eval.ema_decay
             eval_stats = eval_model(model, net_eval, data_loader_fid, device, epoch=epoch, args=args, suffix=f'_ema{ema_decay}')
             if log_writer is not None and "fid" in eval_stats:
@@ -231,8 +204,8 @@ def main(args):
                 log_writer.add_scalar(f"FID_ema{ema_decay}", eval_stats["fid"], epoch + 1)
 
             # Eval extra ema model:
-            for i in range(len(model_without_ddp.ema_decays)):
-                net_eval = model_without_ddp._modules[f"net_ema{i + 1}"]
+            for i in range(len(model.ema_decays)):
+                net_eval = model._modules[f"net_ema{i + 1}"]
                 ema_decay = net_eval.ema_decay
                 eval_stats = eval_model(model, net_eval, data_loader_fid, device, epoch=epoch, args=args, suffix=f'_ema{ema_decay}')
                 if log_writer is not None and "fid" in eval_stats:
@@ -240,7 +213,7 @@ def main(args):
                     log_writer.add_scalar(f"FID_ema{ema_decay}", eval_stats["fid"], epoch + 1)
 
             # Eval no-ema model:
-            net_eval = model_without_ddp.net
+            net_eval = model.net
             eval_stats = eval_model(model, net_eval, data_loader_fid, device, epoch=epoch, args=args, suffix='_noema')
             if log_writer is not None and "fid" in eval_stats:
                 logging.info(f"Eval {epoch + 1} epochs finished: FID w/o ema: {eval_stats['fid']}")
@@ -252,6 +225,9 @@ def main(args):
     total_time = time.time() - start_time
     total_time_str = str(datetime.timedelta(seconds=int(total_time)))
     logger.info(f"Training time {total_time_str}")
+
+    if train_step_runner.compile_failed:
+        logger.info("Training completed with eager execution after torch.compile fallback. Consider running with --not_compile if compiling is unsupported on this system.")
 
 
 if __name__ == "__main__":

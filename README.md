@@ -27,21 +27,36 @@ Run `demo.ipynb` for a demo of 1-step generation and FID evaluation. This demo s
 
 ## Training
 
-Run the script `cifar10_v1.sh` to train from scratch with 8 GPUs.
-It is an improved configuration that can approach ~2.9 FID at 16000 epochs (800k iterations with batch 128x8). It takes 0.21s/iter in 8x H200 GPUs. The checkpoint in `demo.ipynb` (~2.80 FID) is from this script.
+Launch training directly with Python on a single GPU:
 
-The original configuration used in the paper is in `cifar10_v0.sh`.
+```
+python -m meanflow.train \
+    --output_dir=./tmp \
+    --dataset=cifar10 \
+    --batch_size=128 \
+    --lr=0.0006 \
+    --eval_frequency=50 \
+    --epochs=16000 \
+    --compute_fid \
+    --log_per_step=100 \
+    --tr_sampler=v1 \
+    --P_mean_t -0.6 \
+    --P_std_t 1.6 \
+    --P_mean_r -4.0 \
+    --P_std_r 1.6 \
+    --warmup_epochs 200 \
+    --norm_p 0.75 \
+    --ratio 0.75 \
+    --dropout 0.2 \
+    --use_edm_aug
+```
+
+The helper scripts in `meanflow/scripts` now mirror this single-GPU command without requiring `torchrun`.
 
 
 ## Note on JVP
 
 Users may be unfamiliar with the JVP (Jacobian-vector product) operation, which MeanFlow is based on. While JVP is straightforward to implement in JAX, its correct implementation in PyTorch is worth a closer look.
-
-#### DDP
-
-The op `torch.func.jvp` does not support a DDP (`DistributedDataParallel`) object. In your code, you may need to replace `model` with `model.module` to allow `torch.func.jvp` to run. However, doing so may bypass the gradient synchronization normally handled by DDP, **with no error reported**.
-
-In our code, we handle this by `synchronize_gradients(model)`, with a sanity check `gradient_sanity_check`.
 
 #### Compilation
 
@@ -54,8 +69,8 @@ compiled_train_step = torch.compile(
 ```
 where `train_step` is:
 ```
-def train_step(model_without_ddp, *args, **kwargs):
-    loss = model_without_ddp.forward_with_loss(*args, **kwargs)
+def train_step(model, *args, **kwargs):
+    loss = model.forward_with_loss(*args, **kwargs)
     loss.backward(create_graph=False)
     return loss
 ```
