@@ -34,7 +34,24 @@ def is_main_process():
     return get_rank() == 0
 
 
+def _set_non_distributed_attributes(args):
+    args.distributed = False
+    args.rank = 0
+    args.world_size = 1
+    if hasattr(args, "local_rank"):
+        args.local_rank = 0
+    if not hasattr(args, "gpu"):
+        args.gpu = 0
+    else:
+        args.gpu = getattr(args, "gpu", 0)
+
+
 def init_distributed_mode(args):
+    if getattr(args, "distributed", None) is False:
+        print("Distributed training disabled via command line flag")
+        _set_non_distributed_attributes(args)
+        return
+
     if args.dist_on_itp:
         args.rank = int(os.environ["OMPI_COMM_WORLD_RANK"])
         args.world_size = int(os.environ["OMPI_COMM_WORLD_SIZE"])
@@ -57,8 +74,12 @@ def init_distributed_mode(args):
         args.rank = int(os.environ["SLURM_PROCID"])
         args.gpu = args.rank % torch.cuda.device_count()
     else:
+        if getattr(args, "distributed", None) is True:
+            raise RuntimeError(
+                "Distributed training was explicitly requested, but no distributed environment variables were found."
+            )
         print("Not using distributed mode")
-        args.distributed = False
+        _set_non_distributed_attributes(args)
         return
 
     args.distributed = True

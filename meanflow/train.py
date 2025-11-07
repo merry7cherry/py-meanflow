@@ -71,21 +71,33 @@ def get_data_loader(args, is_for_fid):
     logger.info(dataset)
 
     logger.info("Intializing DataLoader")
-    num_tasks = distributed_mode.get_world_size()
-    global_rank = distributed_mode.get_rank()
-    sampler = torch.utils.data.DistributedSampler(
-        dataset, num_replicas=num_tasks, rank=global_rank, shuffle=True
-    )
-    data_loader = torch.utils.data.DataLoader(
-        dataset,
-        sampler=sampler,
+    if args.distributed:
+        num_tasks = distributed_mode.get_world_size()
+        global_rank = distributed_mode.get_rank()
+        sampler = torch.utils.data.DistributedSampler(
+            dataset, num_replicas=num_tasks, rank=global_rank, shuffle=True
+        )
+        logger.info(str(sampler))
+    else:
+        num_tasks = 1
+        global_rank = 0
+        sampler = None
+        logger.info("Using non-distributed data loader with random shuffling")
+
+    dataloader_kwargs = dict(
         worker_init_fn=partial(rng.worker_init_fn, rank=global_rank),
         batch_size=args.batch_size,
         num_workers=args.num_workers,
         pin_memory=args.pin_mem,
-        drop_last=not is_for_fid,  # for FID evaluation, we want to keep all samples
+        drop_last=not is_for_fid,
     )
-    logger.info(str(sampler))
+
+    if sampler is not None:
+        dataloader_kwargs["sampler"] = sampler
+    else:
+        dataloader_kwargs["shuffle"] = True
+
+    data_loader = torch.utils.data.DataLoader(dataset, **dataloader_kwargs)
     return data_loader
 
 

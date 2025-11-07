@@ -50,6 +50,19 @@ def get_args_parser():
     parser.add_argument("--local_rank", default=-1, type=int)
     parser.add_argument("--dist_on_itp", action="store_true")
     parser.add_argument("--dist_url", default="env://", help="url used to set up distributed training")
+    parser.add_argument(
+        "--distributed",
+        dest="distributed",
+        action="store_true",
+        help="Force enable distributed training regardless of environment autodetection.",
+    )
+    parser.add_argument(
+        "--no_distributed",
+        dest="distributed",
+        action="store_false",
+        help="Explicitly disable distributed training.",
+    )
+    parser.set_defaults(distributed=None)
 
     # MeanFlow specific parameters
     parser.add_argument("--ratio", default=0.75, type=float, help="Probability of sampling r (or h) DIFFERENT from t")  
