@@ -21,7 +21,6 @@ import torchvision.datasets as datasets
 from models.model_configs import instantiate_model
 from train_arg_parser import get_args_parser
 
-from training import distributed_mode
 from training.data_transform import get_transform_cifar, get_transform_mnist
 from training.eval_loop import eval_model
 from training.load_and_save import load_model, save_model
@@ -71,44 +70,31 @@ def get_data_loader(args, is_for_fid):
     logger.info(dataset)
 
     logger.info("Intializing DataLoader")
-    num_tasks = distributed_mode.get_world_size()
-    global_rank = distributed_mode.get_rank()
-    sampler = torch.utils.data.DistributedSampler(
-        dataset, num_replicas=num_tasks, rank=global_rank, shuffle=True
-    )
+    shuffle = not is_for_fid
     data_loader = torch.utils.data.DataLoader(
         dataset,
-        sampler=sampler,
-        worker_init_fn=partial(rng.worker_init_fn, rank=global_rank),
+        shuffle=shuffle,
+        worker_init_fn=partial(rng.worker_init_fn, rank=0),
         batch_size=args.batch_size,
         num_workers=args.num_workers,
         pin_memory=args.pin_mem,
         drop_last=not is_for_fid,  # for FID evaluation, we want to keep all samples
     )
-    logger.info(str(sampler))
     return data_loader
 
 
 def main(args):
-    distributed_mode.init_distributed_mode(args)
-
-    print(f"Rank: {distributed_mode.get_rank()}")
-    print(f"World Size: {distributed_mode.get_world_size()}")
-
-    if distributed_mode.get_rank() == 0:
+    if not logging.getLogger().hasHandlers():
         logging.basicConfig(
             level=logging.INFO,
             stream=sys.stdout,
             format="%(asctime)s %(levelname)-8s %(message)s",
             datefmt="%Y-%m-%d %H:%M:%S",
         )
-    else:
-        logger.addHandler(logging.NullHandler())
 
     logger.info("job dir: {}".format(os.path.dirname(os.path.realpath(__file__))))
     logger.info("{}".format(args).replace(", ", ",\n"))
-    if distributed_mode.is_main_process():
-        # create tensorboard
+    if args.output_dir:
         os.makedirs(args.output_dir, exist_ok=True)
         log_writer = SummaryWriter(log_dir=args.output_dir)
         logger.info(f"Tensorboard writer created at {args.output_dir}")
@@ -119,7 +105,7 @@ def main(args):
     device = torch.device(args.device)
 
     # set the seeds
-    seed = args.seed + distributed_mode.get_rank()  # legacy. TODO: rng.fold_in 
+    seed = args.seed
     torch.manual_seed(seed)
     np.random.seed(seed)
 
@@ -138,21 +124,11 @@ def main(args):
     model_without_ddp = model
     print_model(model)
 
-    eff_batch_size = args.batch_size * distributed_mode.get_world_size()
+    eff_batch_size = args.batch_size
 
     logger.info(f"Learning rate: {args.lr:.2e}")
 
     logger.info(f"Effective batch size: {eff_batch_size}")
-
-    if args.distributed:
-        model = torch.nn.parallel.DistributedDataParallel(
-            model, device_ids=[args.gpu],
-            find_unused_parameters=False,
-            broadcast_buffers=False,
-            static_graph=True,
-            gradient_as_bucket_view=True
-        )
-        model_without_ddp = model.module
 
     optimizer = torch.optim.Adam(  # Note: Adam, not AdamW
         model_without_ddp.net.parameters(),  # only the "net" parameters
@@ -191,8 +167,6 @@ def main(args):
     logger.info(f"Start from {args.start_epoch} to {args.epochs} epochs")
     start_time = time.time()
     for epoch in range(args.start_epoch, args.epochs):
-        if args.distributed:
-            data_loader_train.sampler.set_epoch(epoch)
         if not args.eval_only:
             train_one_epoch(
                 model=model,

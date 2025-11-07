@@ -11,53 +11,12 @@ from typing import Iterable, Any, Callable
 import time
 
 import torch
-from torch.nn.parallel import DistributedDataParallel
 from torchmetrics.aggregation import MeanMetric
-import torch.distributed as dist
 from models.augment import AugmentPipe
 import models.rng as rng
 
 
 logger = logging.getLogger(__name__)
-
-
-def synchronize_gradients(model: torch.nn.Module):
-    """
-    In a distributed setting, to enable jvp, we need to call model.module instead of model directly.
-    If so, we synchronize gradients across all processes.
-    """
-    if not isinstance(model, DistributedDataParallel):
-        return
-
-    torch.cuda.synchronize()
-    for param in model.module.parameters():
-        if param.requires_grad and param.grad is not None:
-            dist.all_reduce(param.grad, op=dist.ReduceOp.SUM)
-            param.grad /= dist.get_world_size()
-
-
-def gradient_sanity_check(model):
-    if not isinstance(model, DistributedDataParallel):
-        return
-    torch.cuda.synchronize()
-    # logging.info(f"Gradient sanity check ...")
-    for name, p in model.module.named_parameters():
-        if p.requires_grad and len(p.shape) > 3:
-            monitor = p.grad.norm()
-
-            monitor_list = [torch.zeros_like(monitor) for _ in range(dist.get_world_size())]
-            dist.all_gather(monitor_list, monitor)
-            monitor_tensor = torch.stack(monitor_list)
-            # logging.info(f"All_gathered grad norm, param {name}: ")
-            # for i, m in enumerate(monitor_tensor):
-            #     logging.info(f"Rank {i}: {m:.16f}")
-            # break
-
-            # Assert all gradient norms are close to rank 0's
-            ref = monitor_tensor[0]
-            for i, m in enumerate(monitor_tensor):
-                assert torch.isclose(m, ref), \
-                    f"Gradient norm mismatch at rank {i}: {m} vs rank 0: {ref}"
 
 
 def get_compiled_counts():
@@ -92,7 +51,7 @@ def train_one_epoch(
     batch_time = meters['batch_time']
 
     # declare the unwrapped model
-    model_without_ddp = model if not isinstance(model, DistributedDataParallel) else model.module
+    model_without_ddp = model
 
     tic = time.time()
     for data_iter_step, (samples, index) in enumerate(data_loader):
@@ -113,11 +72,6 @@ def train_one_epoch(
         loss = rng.train_step_with_rng_control(compiled_train_step, model_without_ddp, steps, args.seed, samples, aug_cond)
         if args.compile:
             assert get_compiled_counts() > 0, "Compilation not triggered."
-
-        # sanity check
-        synchronize_gradients(model)  # To support compiling, we need to call model.module and then sync gradients.
-        if (epoch - args.start_epoch) % 100 == 0 and data_iter_step < 2:  # sanity check after the first steps
-            gradient_sanity_check(model)
 
         loss_value = loss.item()
         batch_loss.update(loss_value)

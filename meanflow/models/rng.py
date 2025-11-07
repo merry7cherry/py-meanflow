@@ -11,7 +11,7 @@ import numpy as np
 
 
 def get_rank():
-    return torch.distributed.get_rank() if torch.distributed.is_initialized() else 0
+    return 0
 
 
 def fold_in(seed: int, *args) -> int:

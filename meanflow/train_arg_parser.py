@@ -14,7 +14,7 @@ def get_args_parser():
     parser = argparse.ArgumentParser("Image dataset training", add_help=False)
 
     # Optimizer parameters
-    parser.add_argument("--batch_size", default=64, type=int, help="Batch size per GPU (effective batch size is batch_size * # gpus")
+    parser.add_argument("--batch_size", default=64, type=int, help="Batch size per training step.")
     parser.add_argument("--epochs", default=4000, type=int)
     parser.add_argument("--lr", default=0.0006, type=float, help="learning rate (absolute lr)")
     parser.add_argument("--optimizer_betas", default=[0.9, 0.999], nargs="+", type=float, help="beta1 and beta2 for Adam optimizer")
@@ -44,12 +44,6 @@ def get_args_parser():
     parser.add_argument("--no_pin_mem", action="store_false", dest="pin_mem")
     parser.set_defaults(pin_mem=True)
     parser.add_argument("--log_per_step", default=100, type=int, metavar="N", help="Log training stats every N iterations",)
-
-    # Distributed training parameters
-    parser.add_argument("--world_size", default=1, type=int, help="number of distributed processes")
-    parser.add_argument("--local_rank", default=-1, type=int)
-    parser.add_argument("--dist_on_itp", action="store_true")
-    parser.add_argument("--dist_url", default="env://", help="url used to set up distributed training")
 
     # MeanFlow specific parameters
     parser.add_argument("--ratio", default=0.75, type=float, help="Probability of sampling r (or h) DIFFERENT from t")  

@@ -6,14 +6,11 @@
 from pathlib import Path
 
 import torch
-from training.distributed_mode import is_main_process
-
 import logging
 
 
 def save_on_master(*args, **kwargs):
-    if is_main_process():
-        torch.save(*args, **kwargs)
+    torch.save(*args, **kwargs)
 
 
 def save_model(

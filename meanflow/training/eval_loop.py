@@ -14,10 +14,8 @@ from typing import Iterable
 import PIL.Image
 
 import torch
-from torch.nn.parallel import DistributedDataParallel
 from torchmetrics.image.fid import FrechetInceptionDistance
 from torchvision.utils import save_image
-from training import distributed_mode
 import models.rng as rng
 
 logger = logging.getLogger(__name__)
@@ -26,7 +24,7 @@ PRINT_FREQUENCY = 10
 
 
 def eval_model(
-    model: DistributedDataParallel,
+    model: torch.nn.Module,
     net_ema: torch.nn.Module,
     data_loader: Iterable,
     device: torch.device,
@@ -37,13 +35,10 @@ def eval_model(
     gc.collect()
     model.train(False)
 
-    if args.distributed:
-        data_loader.sampler.set_epoch(0)
-
     assert args.fid_samples <= len(data_loader.dataset), (
         f"In this interface, dataset size ({len(data_loader.dataset)}) must be larger than FID samples ({args.fid_samples})."
     )
-    fid_samples = math.ceil(args.fid_samples / distributed_mode.get_world_size())
+    fid_samples = args.fid_samples
 
     fid_metric = FrechetInceptionDistance(normalize=True).to(device=device, non_blocking=True)
 
@@ -57,7 +52,7 @@ def eval_model(
         fid_metric.update(samples, real=True)  # real is always on the entire dataset
 
         if num_synthetic < fid_samples:          
-            model_without_ddp = model.module if isinstance(model, DistributedDataParallel) else model  
+            model_without_ddp = model
 
             with torch.random.fork_rng(devices=[device]):
                 #per node and per step seed
@@ -101,7 +96,7 @@ def eval_model(
                     os.makedirs(image_dir, exist_ok=True)
                     image_path = (
                         image_dir
-                        / f"{distributed_mode.get_rank()}_{data_iter_step}_{batch_index}.png"
+                        / f"{rng.get_rank()}_{data_iter_step}_{batch_index}.png"
                     )
                     PIL.Image.fromarray(image_np, "RGB").save(image_path)
 
