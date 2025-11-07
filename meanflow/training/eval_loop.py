@@ -59,7 +59,8 @@ def eval_model(
                 torch.manual_seed(rng.fold_in(args.seed, rng.get_rank(), data_iter_step, epoch))
                 with torch.amp.autocast('cuda', enabled=False), torch.no_grad():
                     synthetic_samples = model_without_ddp.sample(samples_shape=samples.shape, net=net_ema, device=device)
-            torch.cuda.synchronize()
+            if torch.cuda.is_available() and device.type == "cuda":
+                torch.cuda.synchronize(device=device)
 
             # Scaling to [0, 1] from [-1, 1]
             synthetic_samples = torch.clamp(

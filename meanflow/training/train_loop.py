@@ -7,11 +7,13 @@ import argparse
 import gc
 import logging
 import math
-from typing import Iterable, Any, Callable
 import time
+from typing import Any, Callable, Iterable
 
 import torch
+from torch._dynamo import exc as dynamo_exc
 from torchmetrics.aggregation import MeanMetric
+
 from models.augment import AugmentPipe
 import models.rng as rng
 
@@ -26,6 +28,46 @@ def get_compiled_counts():
 
 augment_pipe = AugmentPipe(p=0.12, xflip=1e8, yflip=0, scale=1, rotate_frac=0, aniso=1, translate_frac=1)  # turn off yflip and rotate
 
+
+BackendCompilerFailed = getattr(dynamo_exc, "BackendCompilerFailed", RuntimeError)
+
+
+class TrainStepRunner:
+    """Execute a training step with optional torch.compile fallback."""
+
+    def __init__(self, eager_fn: Callable, compiled_fn: Callable, compile_requested: bool):
+        self._eager_fn = eager_fn
+        self._compiled_fn = compiled_fn if compile_requested else eager_fn
+        self._compile_requested = compile_requested
+        self._using_compiled = compile_requested
+        self._warned = False
+
+    @property
+    def using_compiled(self) -> bool:
+        return self._using_compiled
+
+    @property
+    def compile_failed(self) -> bool:
+        return self._compile_requested and not self._using_compiled
+
+    def __call__(self, model_without_ddp: torch.nn.Module, *args, **kwargs):
+        fn = self._compiled_fn if self._using_compiled else self._eager_fn
+        try:
+            return fn(model_without_ddp, *args, **kwargs)
+        except BackendCompilerFailed as exc:
+            if not self._using_compiled:
+                raise
+            if not self._warned:
+                logger.warning(
+                    "torch.compile backend failed (%s). Falling back to eager execution.",
+                    exc.__class__.__name__,
+                )
+                self._warned = True
+            self._using_compiled = False
+            self._compiled_fn = self._eager_fn
+            return self._eager_fn(model_without_ddp, *args, **kwargs)
+
+
 def train_step(model_without_ddp, *args, **kwargs):
     loss = model_without_ddp.forward_with_loss(*args, **kwargs)
     loss.backward(create_graph=False)
@@ -34,7 +76,7 @@ def train_step(model_without_ddp, *args, **kwargs):
 
 def train_one_epoch(
     model: torch.nn.Module,
-    compiled_train_step: Callable,
+    train_step_runner: TrainStepRunner,
     data_loader: Iterable,
     optimizer: torch.optim.Optimizer,
     lr_schedule: torch.torch.optim.lr_scheduler.LRScheduler,
@@ -68,9 +110,9 @@ def train_one_epoch(
 
         if args.compile and epoch == args.start_epoch and data_iter_step == 0:
             logging.info(f"Compiling the first train step, this may take a while...")
-        
-        loss = rng.train_step_with_rng_control(compiled_train_step, model_without_ddp, steps, args.seed, samples, aug_cond)
-        if args.compile:
+
+        loss = rng.train_step_with_rng_control(train_step_runner, model_without_ddp, steps, args.seed, samples, aug_cond)
+        if train_step_runner.using_compiled:
             assert get_compiled_counts() > 0, "Compilation not triggered."
 
         loss_value = loss.item()

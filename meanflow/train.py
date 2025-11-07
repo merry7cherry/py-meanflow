@@ -24,7 +24,7 @@ from train_arg_parser import get_args_parser
 from training.data_transform import get_transform_cifar, get_transform_mnist
 from training.eval_loop import eval_model
 from training.load_and_save import load_model, save_model
-from training.train_loop import train_one_epoch, train_step
+from training.train_loop import TrainStepRunner, train_one_epoch, train_step
 from torchmetrics.aggregation import MeanMetric
 import models.rng as rng
 
@@ -152,10 +152,12 @@ def main(args):
         lr_schedule=lr_schedule,
     )
 
-    compiled_train_step = torch.compile(
-        train_step,
-        disable=not args.compile,
-    )
+    if args.compile:
+        compiled_train_step = torch.compile(train_step)
+    else:
+        compiled_train_step = train_step
+
+    train_step_runner = TrainStepRunner(train_step, compiled_train_step, args.compile)
 
     batch_loss = MeanMetric().to(device, non_blocking=True)
     batch_time = MeanMetric().to(device, non_blocking=True)
@@ -170,7 +172,7 @@ def main(args):
         if not args.eval_only:
             train_one_epoch(
                 model=model,
-                compiled_train_step=compiled_train_step,
+                train_step_runner=train_step_runner,
                 data_loader=data_loader_train,
                 optimizer=optimizer,
                 lr_schedule=lr_schedule,
@@ -226,6 +228,9 @@ def main(args):
     total_time = time.time() - start_time
     total_time_str = str(datetime.timedelta(seconds=int(total_time)))
     logger.info(f"Training time {total_time_str}")
+
+    if train_step_runner.compile_failed:
+        logger.info("Training completed with eager execution after torch.compile fallback. Consider running with --not_compile if compiling is unsupported on this system.")
 
 
 if __name__ == "__main__":
