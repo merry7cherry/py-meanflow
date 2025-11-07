@@ -1,5 +1,7 @@
-torchrun --standalone --nproc_per_node=8 --master_port=12345 \
-    train.py \
+#!/usr/bin/env bash
+set -euo pipefail
+
+python -m meanflow.train \
     --output_dir=./tmp \
     --dataset=cifar10 \
     --batch_size=128 \

@@ -50,10 +50,10 @@ class TrainStepRunner:
     def compile_failed(self) -> bool:
         return self._compile_requested and not self._using_compiled
 
-    def __call__(self, model_without_ddp: torch.nn.Module, *args, **kwargs):
+    def __call__(self, model: torch.nn.Module, *args, **kwargs):
         fn = self._compiled_fn if self._using_compiled else self._eager_fn
         try:
-            return fn(model_without_ddp, *args, **kwargs)
+            return fn(model, *args, **kwargs)
         except BackendCompilerFailed as exc:
             if not self._using_compiled:
                 raise
@@ -65,11 +65,11 @@ class TrainStepRunner:
                 self._warned = True
             self._using_compiled = False
             self._compiled_fn = self._eager_fn
-            return self._eager_fn(model_without_ddp, *args, **kwargs)
+            return self._eager_fn(model, *args, **kwargs)
 
 
-def train_step(model_without_ddp, *args, **kwargs):
-    loss = model_without_ddp.forward_with_loss(*args, **kwargs)
+def train_step(model, *args, **kwargs):
+    loss = model.forward_with_loss(*args, **kwargs)
     loss.backward(create_graph=False)
     return loss
 
@@ -92,9 +92,6 @@ def train_one_epoch(
     batch_loss = meters['batch_loss']
     batch_time = meters['batch_time']
 
-    # declare the unwrapped model
-    model_without_ddp = model
-
     tic = time.time()
     for data_iter_step, (samples, index) in enumerate(data_loader):
         steps = data_iter_step + len(data_loader) * epoch  # global step
@@ -111,7 +108,7 @@ def train_one_epoch(
         if args.compile and epoch == args.start_epoch and data_iter_step == 0:
             logging.info(f"Compiling the first train step, this may take a while...")
 
-        loss = rng.train_step_with_rng_control(train_step_runner, model_without_ddp, steps, args.seed, samples, aug_cond)
+        loss = rng.train_step_with_rng_control(train_step_runner, model, steps, args.seed, samples, aug_cond)
         if train_step_runner.using_compiled:
             assert get_compiled_counts() > 0, "Compilation not triggered."
 
@@ -123,7 +120,7 @@ def train_one_epoch(
 
         # update the parameters
         optimizer.step()
-        model_without_ddp.update_ema()  # moved to begin of train_step
+        model.update_ema()  # moved to begin of train_step
 
         # logging
         toc = time.time()

@@ -52,13 +52,11 @@ def eval_model(
         fid_metric.update(samples, real=True)  # real is always on the entire dataset
 
         if num_synthetic < fid_samples:          
-            model_without_ddp = model
-
             with torch.random.fork_rng(devices=[device]):
                 #per node and per step seed
                 torch.manual_seed(rng.fold_in(args.seed, rng.get_rank(), data_iter_step, epoch))
                 with torch.amp.autocast('cuda', enabled=False), torch.no_grad():
-                    synthetic_samples = model_without_ddp.sample(samples_shape=samples.shape, net=net_ema, device=device)
+                    synthetic_samples = model.sample(samples_shape=samples.shape, net=net_ema, device=device)
             if torch.cuda.is_available() and device.type == "cuda":
                 torch.cuda.synchronize(device=device)
 

@@ -118,10 +118,7 @@ def main(args):
     # define the model
     logger.info("Initializing Model")
     model = instantiate_model(args)
-
     model.to(device)
-
-    model_without_ddp = model
     print_model(model)
 
     eff_batch_size = args.batch_size
@@ -131,7 +128,7 @@ def main(args):
     logger.info(f"Effective batch size: {eff_batch_size}")
 
     optimizer = torch.optim.Adam(  # Note: Adam, not AdamW
-        model_without_ddp.net.parameters(),  # only the "net" parameters
+        model.net.parameters(),  # only the "net" parameters
         lr=args.lr,
         betas=args.optimizer_betas,
         weight_decay=0.0
@@ -147,7 +144,7 @@ def main(args):
 
     load_model(
         args=args,
-        model_without_ddp=model_without_ddp,
+        model=model,
         optimizer=optimizer,
         lr_schedule=lr_schedule,
     )
@@ -191,7 +188,7 @@ def main(args):
             if not args.eval_only:
                 save_model(
                     args=args,
-                    model_without_ddp=model_without_ddp,
+                    model=model,
                     optimizer=optimizer,
                     lr_schedule=lr_schedule,
                     epoch=epoch,
@@ -199,7 +196,7 @@ def main(args):
                 logging.info(f"Saved checkpoint to {args.output_dir}")
 
             # Eval ema model:
-            net_eval = model_without_ddp.net_ema
+            net_eval = model.net_ema
             ema_decay = net_eval.ema_decay
             eval_stats = eval_model(model, net_eval, data_loader_fid, device, epoch=epoch, args=args, suffix=f'_ema{ema_decay}')
             if log_writer is not None and "fid" in eval_stats:
@@ -207,8 +204,8 @@ def main(args):
                 log_writer.add_scalar(f"FID_ema{ema_decay}", eval_stats["fid"], epoch + 1)
 
             # Eval extra ema model:
-            for i in range(len(model_without_ddp.ema_decays)):
-                net_eval = model_without_ddp._modules[f"net_ema{i + 1}"]
+            for i in range(len(model.ema_decays)):
+                net_eval = model._modules[f"net_ema{i + 1}"]
                 ema_decay = net_eval.ema_decay
                 eval_stats = eval_model(model, net_eval, data_loader_fid, device, epoch=epoch, args=args, suffix=f'_ema{ema_decay}')
                 if log_writer is not None and "fid" in eval_stats:
@@ -216,7 +213,7 @@ def main(args):
                     log_writer.add_scalar(f"FID_ema{ema_decay}", eval_stats["fid"], epoch + 1)
 
             # Eval no-ema model:
-            net_eval = model_without_ddp.net
+            net_eval = model.net
             eval_stats = eval_model(model, net_eval, data_loader_fid, device, epoch=epoch, args=args, suffix='_noema')
             if log_writer is not None and "fid" in eval_stats:
                 logging.info(f"Eval {epoch + 1} epochs finished: FID w/o ema: {eval_stats['fid']}")
