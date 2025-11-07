@@ -47,7 +47,13 @@ def _set_non_distributed_attributes(args):
 
 
 def init_distributed_mode(args):
-    if getattr(args, "distributed", None) is False:
+    distributed_flag = getattr(args, "distributed", None)
+    if distributed_flag is None:
+        print("Distributed training disabled by default (single GPU mode)")
+        _set_non_distributed_attributes(args)
+        return
+
+    if distributed_flag is False:
         print("Distributed training disabled via command line flag")
         _set_non_distributed_attributes(args)
         return
@@ -74,7 +80,7 @@ def init_distributed_mode(args):
         args.rank = int(os.environ["SLURM_PROCID"])
         args.gpu = args.rank % torch.cuda.device_count()
     else:
-        if getattr(args, "distributed", None) is True:
+        if distributed_flag is True:
             raise RuntimeError(
                 "Distributed training was explicitly requested, but no distributed environment variables were found."
             )
