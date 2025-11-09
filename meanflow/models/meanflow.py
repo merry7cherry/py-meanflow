@@ -67,13 +67,48 @@ class MeanFlow(nn.Module):
         
         return loss
     
-    def sample(self, samples_shape, net=None, device=None):
-        net = net if net is not None else self.net_ema                
+    def sample(self, samples_shape, net=None, device=None, steps: int = 1):
+        """Draw samples by integrating the mean-flow velocity field.
 
-        e = torch.randn(samples_shape, dtype=torch.float32, device=device)
-        z_1 = e
-        t = torch.ones(samples_shape[0], device=device)
-        r = torch.zeros(samples_shape[0], device=device)
-        u = net(z_1, (t, t - r), aug_cond=None)
-        z_0 = z_1 - u
-        return z_0
+        Args:
+            samples_shape: Shape of the samples to generate.
+            net: Network used for inference. Defaults to the EMA network.
+            device: Device used for generation.
+            steps: Number of uniform inference steps between time 0 and 1.
+
+        Returns:
+            Tensor of generated samples corresponding to time 0.
+        """
+
+        if steps < 1:
+            raise ValueError("steps must be a positive integer")
+
+        net = net if net is not None else self.net_ema
+        device = device if device is not None else next(net.parameters()).device
+
+        was_training = net.training
+        net.eval()
+
+        with torch.no_grad():
+            current = torch.randn(samples_shape, dtype=torch.float32, device=device)
+            batch_size = samples_shape[0]
+            times = torch.linspace(0.0, 1.0, steps + 1, device=device, dtype=current.dtype)
+
+            for idx in range(steps):
+                current_time = times[idx]
+                next_time = times[idx + 1]
+                evaluation_time = 1.0 - current_time
+                reference_time = 1.0 - next_time
+
+                t = torch.full((batch_size,), evaluation_time, device=device, dtype=current.dtype)
+                r = torch.full((batch_size,), reference_time, device=device, dtype=current.dtype)
+                h = t - r
+
+                velocity = net(current, (t, h), aug_cond=None)
+                dt = next_time - current_time
+                current = current - velocity * dt
+
+        if was_training:
+            net.train(True)
+
+        return current
