@@ -67,7 +67,15 @@ class MeanFlow(nn.Module):
         
         return loss
     
-    def sample(self, samples_shape, net=None, device=None, steps: int = 1):
+    def sample(
+        self,
+        samples_shape,
+        net=None,
+        device=None,
+        steps: int = 1,
+        *,
+        target_oriented: bool = True,
+    ):
         """Draw samples by integrating the mean-flow velocity field.
 
         Args:
@@ -75,6 +83,9 @@ class MeanFlow(nn.Module):
             net: Network used for inference. Defaults to the EMA network.
             device: Device used for generation.
             steps: Number of uniform inference steps between time 0 and 1.
+            target_oriented: Whether to use target-oriented stepping that
+                mirrors the training reference schedule. When ``False`` the
+                reference time is fixed to zero for every step.
 
         Returns:
             Tensor of generated samples corresponding to time 0.
@@ -98,7 +109,10 @@ class MeanFlow(nn.Module):
                 current_time = times[idx]
                 next_time = times[idx + 1]
                 evaluation_time = 1.0 - current_time
-                reference_time = 1.0 - next_time
+                if target_oriented:
+                    reference_time = 1.0 - next_time
+                else:
+                    reference_time = 0.0
 
                 t = torch.full((batch_size,), evaluation_time, device=device, dtype=current.dtype)
                 r = torch.full((batch_size,), reference_time, device=device, dtype=current.dtype)
